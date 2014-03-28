@@ -34,6 +34,7 @@ import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.mapreduce.MRJobConfig;
 import org.apache.hadoop.mapreduce.v2.api.records.TaskAttemptId;
+import org.apache.hadoop.mapreduce.v2.api.records.TaskType;
 import org.apache.hadoop.mapreduce.v2.app.AppContext;
 import org.apache.hadoop.mapreduce.v2.app.client.ClientService;
 import org.apache.hadoop.yarn.api.protocolrecords.AllocateRequest;
@@ -47,6 +48,7 @@ import org.apache.hadoop.yarn.exceptions.YarnException;
 import org.apache.hadoop.yarn.exceptions.YarnRuntimeException;
 import org.apache.hadoop.yarn.factories.RecordFactory;
 import org.apache.hadoop.yarn.factory.providers.RecordFactoryProvider;
+import org.apache.hadoop.yarn.util.RackResolver;
 
 
 /**
@@ -91,6 +93,9 @@ public abstract class RMContainerRequestor extends RMCommunicator {
       .newSetFromMap(new ConcurrentHashMap<String, Boolean>());
   private final Set<String> blacklistRemovals = Collections
       .newSetFromMap(new ConcurrentHashMap<String, Boolean>());
+
+  private boolean cBDModeEnabled;
+  private HostGroupLabelsFileReader hostGroupLabelsFileReader;
 
   public RMContainerRequestor(ClientService clientService, AppContext context) {
     super(clientService, context);
@@ -147,6 +152,41 @@ public abstract class RMContainerRequestor extends RMCommunicator {
           + ". Should be an integer between 0 and 100 or -1 to disabled");
     }
     LOG.info("blacklistDisablePercent is " + blacklistDisablePercent);
+
+    cBDModeEnabled =
+        conf.getBoolean(MRJobConfig.MR_AM_JOB_CBD_MODE_ENABLE, false);
+    LOG.info("cBDModeEnabled:" + cBDModeEnabled);
+    if (cBDModeEnabled) {
+      RackResolver.init(conf);
+      // Read the map.hosts/reduce.hosts files to place map/reduce tasks.
+      this.hostGroupLabelsFileReader = new HostGroupLabelsFileReader();
+      final String hostGroupLabelsFile =
+          conf.get(MRJobConfig.MR_AM_JOB_HOSTGROUP_LABELS_FILE, "");
+      hostGroupLabelsFileReader.setHostGroupLabelsFile(hostGroupLabelsFile);
+      if (!hostGroupLabelsFile.equals("")) {
+        final String computeHostGroupLabel =
+            conf.get(MRJobConfig.MR_AM_JOB_COMPUTE_HOSTGROUP_LABEL,
+                "Compute-Nodes");
+        final String storageHostGroupLabel =
+            conf.get(MRJobConfig.MR_AM_JOB_STORAGE_HOSTGROUP_LABEL,
+                "Storage-Nodes");
+        final boolean mapPushDown =
+            conf.getBoolean(MRJobConfig.MR_AM_JOB_MAP_PUSHDOWN, true);
+        String mapHostGroupLabel =
+            conf.get(MRJobConfig.MR_AM_JOB_MAP_HOSTGROUP_LABEL,
+                computeHostGroupLabel);
+        mapHostGroupLabel =
+            mapPushDown ? storageHostGroupLabel : mapHostGroupLabel;
+        final String reduceHostGroupLabel =
+            conf.get(MRJobConfig.MR_AM_JOB_REDUCE_HOSTGROUP_LABEL,
+                computeHostGroupLabel);
+        hostGroupLabelsFileReader.setMapReduceHostGroupLabels(
+            mapHostGroupLabel, reduceHostGroupLabel);
+
+        hostGroupLabelsFileReader.refresh();
+      }
+    }
+
   }
 
   protected AllocateResponse makeRemoteRequest() throws IOException {
@@ -214,6 +254,10 @@ public abstract class RMContainerRequestor extends RMCommunicator {
           // notify RM to ignore all the blacklisted nodes
           blacklistAdditions.clear();
           blacklistRemovals.addAll(blacklistedNodes);
+          // Viplav
+          if (cBDModeEnabled) {
+            blacklistAdditions.add(ResourceRequest.ANY);
+          }
         }
       } else {
         if (ignoreBlacklisting.compareAndSet(true, false)) {
@@ -297,12 +341,20 @@ public abstract class RMContainerRequestor extends RMCommunicator {
   }
   
   protected void addContainerReq(ContainerRequest req) {
+    if (cBDModeEnabled) {
+      addCBDContainerReq(req);
+    } else {
+      addNonCBDContainerReq(req);
+    }
+  }
+
+  private void addNonCBDContainerReq(ContainerRequest req) {
     // Create resource requests
     for (String host : req.hosts) {
       // Data-local
       if (!isNodeBlacklisted(host)) {
         addResourceRequest(req.priority, host, req.capability);
-      }      
+      }
     }
 
     // Nothing Rack-local for now
@@ -312,6 +364,49 @@ public abstract class RMContainerRequestor extends RMCommunicator {
 
     // Off-switch
     addResourceRequest(req.priority, ResourceRequest.ANY, req.capability);
+  }
+
+  private void addCBDContainerReq(ContainerRequest req) {
+
+    boolean dataLocalHostsRequested = false;
+    // if pushdown - Viplav
+    // try data local first
+    if (req.attemptID.getTaskId().getTaskType() == TaskType.MAP) {
+      for (String host : req.hosts) {
+        if (inMapHostsList(host) && !isNodeBlacklisted(host)) {
+          addResourceRequest(req.priority, host, req.capability);
+          dataLocalHostsRequested = true;
+        }
+      }
+      // if no data local hosts are requested, try non data-local
+      if (!dataLocalHostsRequested) {
+        Set<String> mapHostsList = hostGroupLabelsFileReader.getMapHostGroup();
+        for (String host : mapHostsList) {
+          addResourceRequest(req.priority, host, req.capability);
+        }
+      }
+      // "blacklist" racks
+      for (String rack : req.racks) {
+        addCBDResourceRequest(req.priority, rack, req.capability, false);
+      }
+    } else
+    // add reduce requests - no data-locality
+    if (req.attemptID.getTaskId().getTaskType() == TaskType.REDUCE) {
+        Set<String> reduceHostsList =
+            hostGroupLabelsFileReader.getReduceHostGroup();
+        for (String host : reduceHostsList) {
+           addResourceRequest(req.priority, host, req.capability);
+           // "blacklist" corresponding rack
+           addCBDResourceRequest(req.priority, 
+                                 RackResolver.resolve(host).getNetworkLocation(), 
+                                 req.capability, false);
+        }
+      }
+
+    // "blacklist" Off-switch
+    addCBDResourceRequest(req.priority, ResourceRequest.ANY, req.capability,
+        false);
+
   }
 
   protected void decContainerReq(ContainerRequest req) {
@@ -327,8 +422,14 @@ public abstract class RMContainerRequestor extends RMCommunicator {
     decResourceRequest(req.priority, ResourceRequest.ANY, req.capability);
   }
 
+
   private void addResourceRequest(Priority priority, String resourceName,
       Resource capability) {
+    addCBDResourceRequest(priority, resourceName, capability, true);
+  }
+
+  private void addCBDResourceRequest(Priority priority, String resourceName,
+      Resource capability, boolean relaxLocality) {
     Map<String, Map<Resource, ResourceRequest>> remoteRequests =
       this.remoteRequestsTable.get(priority);
     if (remoteRequests == null) {
@@ -350,6 +451,9 @@ public abstract class RMContainerRequestor extends RMCommunicator {
       remoteRequest.setResourceName(resourceName);
       remoteRequest.setCapability(capability);
       remoteRequest.setNumContainers(0);
+      if (cBDModeEnabled) {
+        remoteRequest.setRelaxLocality(relaxLocality);
+      }
       reqMap.put(capability, remoteRequest);
     }
     remoteRequest.setNumContainers(remoteRequest.getNumContainers() + 1);
@@ -453,4 +557,26 @@ public abstract class RMContainerRequestor extends RMCommunicator {
   public Set<String> getBlacklistedNodes() {
     return blacklistedNodes;
   }
+
+  /**
+   * Return if the specified host is in the map hosts list, if one was
+   * configured. If none was configured, then this returns true.
+   */
+  private boolean inMapHostsList(String host) {
+    Set<String> mapHostsList = hostGroupLabelsFileReader.getMapHostGroup();
+    return (mapHostsList == null || mapHostsList.isEmpty() || mapHostsList
+        .contains(host));
+  }
+
+  /**
+   * Return if the specified host is in the reduce hosts list, if one was
+   * configured. If none was configured, then this returns true.
+   */
+  private boolean inReduceHostsList(String host) {
+    Set<String> reduceHostsList =
+        hostGroupLabelsFileReader.getReduceHostGroup();
+    return (reduceHostsList == null || reduceHostsList.isEmpty() || reduceHostsList
+        .contains(host));
+  }
+
 }

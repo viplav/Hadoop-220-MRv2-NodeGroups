@@ -427,6 +427,34 @@ public interface MRJobConfig {
   public static final int DEFAULT_MR_AM_IGNORE_BLACKLISTING_BLACKLISTED_NODE_PERCENT =
       33;
   
+  /** Enable CBD mode for the job. */
+  public static final String MR_AM_JOB_CBD_MODE_ENABLE = MR_AM_PREFIX
+      + "job.cbd-mode.enable";
+
+  /** CBD mode - host group labels file name. */
+  public static final String MR_AM_JOB_HOSTGROUP_LABELS_FILE = MR_AM_PREFIX
+      + "job.hostgroup.labels.file";
+
+  /** CBD mode - host group label for the Compute group. */
+  public static final String MR_AM_JOB_COMPUTE_HOSTGROUP_LABEL = MR_AM_PREFIX
+      + "job.compute.hostgroup.label";
+
+  /** CBD mode - host group label for the Storage group. */
+  public static final String MR_AM_JOB_STORAGE_HOSTGROUP_LABEL = MR_AM_PREFIX
+      + "job.storage.hostgroup.label";
+
+  /** CBD mode - host group label for the Map tasks. */
+  public static final String MR_AM_JOB_MAP_HOSTGROUP_LABEL = MR_AM_PREFIX
+      + "job.map.hostgroup.label";
+
+  /** CBD mode - enable pushdown of Map tasks to storage. */
+  public static final String MR_AM_JOB_MAP_PUSHDOWN = MR_AM_PREFIX
+      + "job.map.pushdown";
+
+  /** CBD mode - host group label for the Reduce tasks. */
+  public static final String MR_AM_JOB_REDUCE_HOSTGROUP_LABEL = MR_AM_PREFIX
+      + "job.reduce.hostgroup.label";
+
   /** Enable job recovery.*/
   public static final String MR_AM_JOB_RECOVERY_ENABLE = 
     MR_AM_PREFIX + "job.recovery.enable";
