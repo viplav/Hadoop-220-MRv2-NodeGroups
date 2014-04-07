@@ -378,25 +378,31 @@ public abstract class RMContainerRequestor extends RMCommunicator {
           dataLocalHostsRequested = true;
         }
       }
+      // "whitelist" the local racks, "blacklist" off-racks
+      for (String rack : req.racks) {
+        addCBDResourceRequest(req.priority, rack, req.capability, false);
+      }
       // if no data local hosts are requested, try non data-local
+      //   but within the map nodegroup list hosts
       if (!dataLocalHostsRequested) {
         Set<String> mapHostsList = hostGroupLabelsFileReader.getMapHostGroup();
         for (String host : mapHostsList) {
           addResourceRequest(req.priority, host, req.capability);
+          // "whitelist" the rack, blacklist other racks
+          addCBDResourceRequest(req.priority, 
+                                RackResolver.resolve(host).getNetworkLocation(), 
+                                req.capability, false);          
         }
-      }
-      // "blacklist" racks
-      for (String rack : req.racks) {
-        addCBDResourceRequest(req.priority, rack, req.capability, false);
       }
     } else
     // add reduce requests - no data-locality
+    //   request reduce nodegroup list hosts  
     if (req.attemptID.getTaskId().getTaskType() == TaskType.REDUCE) {
         Set<String> reduceHostsList =
             hostGroupLabelsFileReader.getReduceHostGroup();
         for (String host : reduceHostsList) {
            addResourceRequest(req.priority, host, req.capability);
-           // "blacklist" corresponding rack
+           //"whitelist" the rack, blacklist other racks
            addCBDResourceRequest(req.priority, 
                                  RackResolver.resolve(host).getNetworkLocation(), 
                                  req.capability, false);
