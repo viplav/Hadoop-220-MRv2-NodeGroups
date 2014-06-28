@@ -79,8 +79,6 @@ public class HostGroupLabelsFileReader {
 		  Element root = doc.getDocumentElement();
 		  root.normalize();
 
-		  // System.out.println("Root Elem Name: " + root.getNodeName());
-		  // System.out.println("Root Elem Tag: " + root.getTagName());
 		  if (!"CBD-NodeGroups".equalsIgnoreCase(root.getTagName())) {
 			  LOG.fatal ("Bad node group labels file " + labelsFile);
 			  throw new RuntimeException ("Bad node group labels file " + labelsFile);
@@ -89,8 +87,6 @@ public class HostGroupLabelsFileReader {
 		  NodeList nodeGroupLabelsList = root.getChildNodes();
 		  for (int i=0; i < nodeGroupLabelsList.getLength(); i++) {
 			  Node nodeGroupLabelNode = nodeGroupLabelsList.item(i);
-			  // System.out.println("ngl node : " + nglNode.getNodeName());
-			  // System.out.println("ngl node text : " + nglNode.getTextContent());
 			  if (!(nodeGroupLabelNode instanceof Element))
 				  continue;
 			  Element nodeGroupLabel = (Element) nodeGroupLabelNode;
@@ -98,19 +94,15 @@ public class HostGroupLabelsFileReader {
 				  throw new RuntimeException("Bad CBD NodeGroups labels file - no NodeGroupLabel");	
 			  }
 			  String nodeGroupLabelAttr = nodeGroupLabel.getAttribute("label");
-			  // System.out.println(nodeGroupLabel.getTagName() + ": " + nodeGroupLabelAttr);
 
 			  NodeList nodeList = nodeGroupLabel.getChildNodes();
 			  Set<String> nodeSet = new HashSet<String>();
 			  for (int j=0; j < nodeList.getLength(); j++) {
 				  Node nodeNode = nodeList.item(j);
-				  // System.out.println("node node : " + nodeNode.getNodeName());
-				  // System.out.println("node text : " + nodeNode.getTextContent());
 				  if (!(nodeNode instanceof Element))
 					  continue;
 				  Element nodeElem = (Element) nodeNode;
 				  if ("Node".equalsIgnoreCase(nodeElem.getTagName())) {
-					  // System.out.println( "Node ==> " + nodeElem.getTextContent().trim());
 					  nodeSet.add(nodeElem.getTextContent().trim());
 				  }
 			  }
@@ -164,11 +156,17 @@ public class HostGroupLabelsFileReader {
   public synchronized void setMapHostGroupLabel(String mapHostGroupLabel) {
     LOG.info("Using the map hostgroup label : " + mapHostGroupLabel);
     this.mapHostGroupLabel = mapHostGroupLabel;
+    if (!mapHostGroupLabel.equals("")) {
+      mapHostGroup = hostGroupsLabelsMap.get(mapHostGroupLabel.toLowerCase());
+    }    
   }
   
   public synchronized void setReduceHostGroupLabel(String reduceHostGroupLabel) {
     LOG.info("Using the reduce hostgroup label : " + reduceHostGroupLabel);
     this.reduceHostGroupLabel = reduceHostGroupLabel;
+    if (!reduceHostGroupLabel.equals("")) {
+      reduceHostGroup = hostGroupsLabelsMap.get(reduceHostGroupLabel.toLowerCase());
+    }    
   }
 
   public synchronized void setMapReduceHostGroupLabels(String mapHostGroupLabel, 
@@ -178,4 +176,13 @@ public class HostGroupLabelsFileReader {
     setReduceHostGroupLabel(reduceHostGroupLabel);
   }
 
+  public synchronized boolean hostGroupLabelIsValid(String hostGroupLabel) {
+    if ( hostGroupsLabelsMap.containsKey(hostGroupLabel.toLowerCase()) ) {
+      return true;      
+    }
+    else {
+      return false;      
+    }
+  }
+  
 }

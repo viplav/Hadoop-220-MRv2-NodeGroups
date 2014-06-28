@@ -136,6 +136,10 @@ public abstract class RMContainerRequestor extends RMCommunicator {
   @Override
   protected void serviceInit(Configuration conf) throws Exception {
     super.serviceInit(conf);
+    
+    final String DEFAULT_COMPUTE_NODEGROUP = "DefaultComputeHerd";
+    final String DEFAULT_STORAGE_NODEGROUP = "DefaultStorageHerd";
+    
     nodeBlacklistingEnabled = 
       conf.getBoolean(MRJobConfig.MR_AM_JOB_NODE_BLACKLISTING_ENABLE, true);
     LOG.info("nodeBlacklistingEnabled:" + nodeBlacklistingEnabled);
@@ -166,10 +170,10 @@ public abstract class RMContainerRequestor extends RMCommunicator {
       if (!hostGroupLabelsFile.equals("")) {
         final String computeHostGroupLabel =
             conf.get(MRJobConfig.MR_AM_JOB_COMPUTE_HOSTGROUP_LABEL,
-                "Compute-Nodes");
+                DEFAULT_COMPUTE_NODEGROUP);
         final String storageHostGroupLabel =
             conf.get(MRJobConfig.MR_AM_JOB_STORAGE_HOSTGROUP_LABEL,
-                "Storage-Nodes");
+                DEFAULT_STORAGE_NODEGROUP);
         final boolean mapPushDown =
             conf.getBoolean(MRJobConfig.MR_AM_JOB_MAP_PUSHDOWN, true);
         String mapHostGroupLabel =
@@ -177,13 +181,50 @@ public abstract class RMContainerRequestor extends RMCommunicator {
                 computeHostGroupLabel);
         mapHostGroupLabel =
             mapPushDown ? storageHostGroupLabel : mapHostGroupLabel;
-        final String reduceHostGroupLabel =
+        String reduceHostGroupLabel =
             conf.get(MRJobConfig.MR_AM_JOB_REDUCE_HOSTGROUP_LABEL,
                 computeHostGroupLabel);
         hostGroupLabelsFileReader.setMapReduceHostGroupLabels(
             mapHostGroupLabel, reduceHostGroupLabel);
 
         hostGroupLabelsFileReader.refresh();
+        
+        // Make sure we have a valid label for Map and Reduce HostGroups 
+        if (!hostGroupLabelsFileReader.hostGroupLabelIsValid(mapHostGroupLabel)) {
+          if (mapHostGroupLabel.equalsIgnoreCase(DEFAULT_COMPUTE_NODEGROUP)) {
+            cBDModeEnabled = false;
+          } else {
+            LOG.warn("CBD Map HostGroup Label " + mapHostGroupLabel + " not found in config file." );    
+            LOG.warn("Using Defaut Compute Nodegroup " +  DEFAULT_COMPUTE_NODEGROUP);                                  
+            mapHostGroupLabel = DEFAULT_COMPUTE_NODEGROUP;
+            if (!hostGroupLabelsFileReader.hostGroupLabelIsValid(mapHostGroupLabel)) {
+              cBDModeEnabled = false;              
+            }
+            else {
+              hostGroupLabelsFileReader.setMapHostGroupLabel(DEFAULT_COMPUTE_NODEGROUP);
+            }            
+          }
+        }
+        if (!hostGroupLabelsFileReader.hostGroupLabelIsValid(reduceHostGroupLabel)) {
+          if (reduceHostGroupLabel.equalsIgnoreCase(DEFAULT_COMPUTE_NODEGROUP)) {
+            cBDModeEnabled = false;
+          } else {
+            LOG.warn("CBD Reduce HostGroup Label " + reduceHostGroupLabel + " not found in config file." );    
+            LOG.warn("Using Defaut Compute Nodegroup " +  DEFAULT_COMPUTE_NODEGROUP);            
+            reduceHostGroupLabel = DEFAULT_COMPUTE_NODEGROUP;
+            if (!hostGroupLabelsFileReader.hostGroupLabelIsValid(reduceHostGroupLabel)) {
+              cBDModeEnabled = false;              
+            }
+            else {
+              hostGroupLabelsFileReader.setReduceHostGroupLabel(DEFAULT_COMPUTE_NODEGROUP);
+            }
+          }
+        }
+        if (!cBDModeEnabled) {
+          // Don't think we have much an option
+          LOG.warn("Default Compute NodeGroup not present in config file." );            
+          LOG.warn("Disabling CBD Mode." );                      
+        }
       }
     }
 
@@ -369,7 +410,7 @@ public abstract class RMContainerRequestor extends RMCommunicator {
   private void addCBDContainerReq(ContainerRequest req) {
 
     boolean dataLocalHostsRequested = false;
-    // if pushdown - Viplav
+ 
     // try data local first
     if (req.attemptID.getTaskId().getTaskType() == TaskType.MAP) {
       for (String host : req.hosts) {
@@ -386,6 +427,7 @@ public abstract class RMContainerRequestor extends RMCommunicator {
       //   but within the map nodegroup list hosts
       if (!dataLocalHostsRequested) {
         Set<String> mapHostsList = hostGroupLabelsFileReader.getMapHostGroup();
+        assert mapHostsList != null;
         for (String host : mapHostsList) {
           addResourceRequest(req.priority, host, req.capability);
           // "whitelist" the rack, blacklist other racks
@@ -400,6 +442,7 @@ public abstract class RMContainerRequestor extends RMCommunicator {
     if (req.attemptID.getTaskId().getTaskType() == TaskType.REDUCE) {
         Set<String> reduceHostsList =
             hostGroupLabelsFileReader.getReduceHostGroup();
+        assert reduceHostsList != null;
         for (String host : reduceHostsList) {
            addResourceRequest(req.priority, host, req.capability);
            //"whitelist" the rack, blacklist other racks
